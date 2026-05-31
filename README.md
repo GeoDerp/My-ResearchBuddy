@@ -54,11 +54,32 @@ export MISTRAL_API_KEY="your-key-here"
 uv run python main.py
 ```
 
+### Web UI
+
+A browser-based chat interface is available alongside the CLI. It streams research progress in real-time and renders the final report as Markdown.
+
+```bash
+uv run uvicorn server:app --port 8000
+```
+
+Open [http://localhost:8000](http://localhost:8000).
+
+Add `--reload` for development (auto-restarts on file changes). To expose on the network:
+
+```bash
+uv run uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+The `RESEARCH_TIMEOUT` environment variable sets the per-request timeout in seconds (default: `600`).
+
 ## Project Structure
 
 ```
 .
-├── main.py                   # Agent entry point
+├── main.py                   # Agent — CLI entry point
+├── server.py                 # Agent — FastAPI web server
+├── static/
+│   └── index.html            # Browser chat UI
 ├── pyproject.toml            # Dependencies (managed by uv)
 ├── LICENSE
 └── .devcontainer/

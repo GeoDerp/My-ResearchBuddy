@@ -12,6 +12,9 @@
     }
   },
 
+  "forwardPorts": [8000],
+
+
   // Drop all Linux capabilities; add back only what dev work needs.
   // no-new-privileges prevents SUID binaries from escalating at runtime.
   "runArgs": [
