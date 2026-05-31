@@ -1,0 +1,36 @@
+# Hardened SSH daemon configuration.
+# Applied only if openssh-server is installed.
+Protocol 2
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+PermitRootLogin no
+PermitEmptyPasswords no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+UsePAM yes
+AuthorizedKeysFile .ssh/authorized_keys
+
+MaxAuthTries 3
+LoginGraceTime 60
+ClientAliveInterval 600
+ClientAliveCountMax 0
+
+X11Forwarding no
+AllowTcpForwarding no
+PermitTunnel no
+GatewayPorts no
+AllowAgentForwarding no
+PermitUserEnvironment no
+PrintMotd no
+
+Ciphers aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
+MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256
+KexAlgorithms ecdh-sha2-nistp521,ecdh-sha2-nistp384,ecdh-sha2-nistp256,diffie-hellman-group-exchange-sha256
+HostKeyAlgorithms ecdsa-sha2-nistp521,ecdsa-sha2-nistp384,ecdsa-sha2-nistp256,ssh-ed25519
+
+Banner /etc/issue.net
+LogLevel VERBOSE
+SyslogFacility AUTHPRIV
+Subsystem sftp /usr/lib/openssh/sftp-server
