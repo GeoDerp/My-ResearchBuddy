@@ -1,4 +1,6 @@
-# My Research Agent
+<div align="center">
+  <img src="docs/banner.svg" alt="My Research Agent" width="800"/>
+</div>
 
 A multi-step deep research agent built with [LangGraph](https://github.com/langchain-ai/langgraph) and LangChain. Given a query, the agent plans a research strategy, gathers technical literature, searches for candidates, cross-references public sentiment, evaluates completeness, and synthesizes a final report — looping back if the results don't meet its own criteria.
 

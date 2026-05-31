@@ -1,13 +1,94 @@
 import os
-import operator
+import sys
+import time
+import random
+import requests
+import urllib.robotparser
 from typing import TypedDict, List, Annotated
+from urllib.parse import urlparse
 from pydantic import BaseModel, Field
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
+# Flush all print() calls immediately even when stdout is piped.
+import functools
+
+print = functools.partial(print, flush=True)
 
 # LangChain and LangGraph imports
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from langgraph.graph import StateGraph, END
 from langgraph.types import Send
+
+
+# ── Ethical Web Scraping ──────────────────────────────────────────────────────
+
+# Honest identification — declare exactly what this bot is.
+# Update the contact address before deploying in production.
+BOT_USER_AGENT = (
+    "DeepResearchBot/1.0 (Educational/Research Purpose; +contact: your-email@example.com)"
+)
+
+# Cache robots.txt parsers so each host is only queried once per run.
+_robot_parsers: dict = {}
+
+
+def can_fetch(url: str, user_agent: str) -> bool:
+    """Returns True if robots.txt permits the given user agent to fetch the URL."""
+    parsed = urlparse(url)
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+    robots_url = f"{base_url}/robots.txt"
+
+    if base_url not in _robot_parsers:
+        rp = urllib.robotparser.RobotFileParser()
+        rp.set_url(robots_url)
+        try:
+            resp = requests.get(robots_url, headers={"User-Agent": user_agent}, timeout=5)
+            if resp.status_code == 200:
+                rp.parse(resp.text.splitlines())
+                _robot_parsers[base_url] = rp
+            elif resp.status_code in (401, 403):
+                # Server actively blocks access to robots.txt — assume blanket ban.
+                _robot_parsers[base_url] = "BLOCKED"
+            else:
+                _robot_parsers[base_url] = rp
+        except Exception:
+            # robots.txt unavailable — web convention permits fetching.
+            _robot_parsers[base_url] = rp
+
+    parser = _robot_parsers[base_url]
+    if parser == "BLOCKED":
+        return False
+    return parser.can_fetch(user_agent, url)
+
+
+def fetch_webpage_text(url: str, max_chars: int = 4000) -> str:
+    """Fetches a URL ethically: checks robots.txt, declares the bot honestly,
+    applies a 1.5 s politeness delay, and strips boilerplate HTML tags."""
+    if not can_fetch(url, BOT_USER_AGENT):
+        return "[ETHICS BLOCK] robots.txt forbids automated access to this URL."
+
+    try:
+        # Randomized jitter prevents parallel agents from hitting the same server simultaneously.
+        time.sleep(random.uniform(1.0, 3.0))
+        response = requests.get(url, headers={"User-Agent": BOT_USER_AGENT}, timeout=10)
+
+        if response.status_code in (401, 403):
+            return f"[ETHICS BLOCK] Server refused connection (HTTP {response.status_code})."
+
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "aside", "header"]):
+            tag.extract()
+
+        return soup.get_text(separator=" ", strip=True)[:max_chars]
+
+    except requests.exceptions.RequestException as e:
+        return f"Could not fetch content: {str(e)}"
 
 
 # ── Reducer ───────────────────────────────────────────────────────────────────
@@ -170,28 +251,46 @@ def node_sub_agent(task: SubtopicTask) -> dict:
     query = task["query"]
     feedback = task.get("feedback", "")
 
-    # On loop-back iterations, append a brief excerpt of the evaluator's feedback.
-    # Feedback is truncated to avoid generating search URLs that exceed length limits.
-    effective_query = query
-    if feedback and feedback not in ("None", ""):
-        brief_feedback = feedback[:200].rsplit(" ", 1)[0]  # trim at word boundary
-        effective_query = f"{query} {brief_feedback}"
-
     print(f"\n--- [SUB-AGENT] {subtopic} ---")
-    print(f"  Query: {effective_query[:90]}...")
+    print(f"  Query: {query[:90]}...")
 
-    # Structured search — each result dict has "title", "link", "snippet"
-    raw_results = search_wrapper.results(effective_query, max_results=6)
+    # Structured search — each result dict has "title", "link", "snippet".
+    # max_results=4 balances depth against the politeness delay.
+    try:
+        raw_results = search_wrapper.results(query, max_results=4)
+    except Exception as e:
+        print(f"  [API ERROR] DuckDuckGo search failed: {e}")
+        raw_results = []
 
-    # Build citation strings from result URLs for inclusion in the final report.
-    citation_urls = [
-        f"[{r.get('title', 'Source')}]({r.get('link', '')})" for r in raw_results if r.get("link")
-    ]
+    # Fetch full page content for each result while respecting robots.txt.
+    citation_urls = []
+    search_parts = []
+    for r in raw_results:
+        link = r.get("link", "")
+        title = r.get("title", "Source")
+        snippet = r.get("snippet", "")
+        if link:
+            citation_urls.append(f"[{title}]({link})")
+            page_content = fetch_webpage_text(link)
+        else:
+            page_content = ""
+        search_parts.append(
+            f"Source: {link or 'N/A'}\nTitle: {title}\n"
+            f"Search Snippet: {snippet}\nPage Content: {page_content}"
+        )
 
-    search_text = "\n\n".join(
-        f"Source: {r.get('link', 'N/A')}\nTitle: {r.get('title', '')}\n{r.get('snippet', '')}"
-        for r in raw_results
-    )
+    search_text = "\n\n---\n\n".join(search_parts)
+
+    # Inject evaluator feedback into the LLM prompt — NOT the search query —
+    # to avoid generating URLs that are too long for DuckDuckGo.
+    feedback_instructions = ""
+    if feedback and feedback not in ("None", ""):
+        feedback_instructions = (
+            f"\n\nPRIORITY FOCUS (ITERATION FEEDBACK):\n"
+            f"The evaluation supervisor noted the following gaps in the overall research:\n"
+            f'"{feedback}"\n'
+            f"Pay special attention to extracting evidence that resolves this gap if present."
+        )
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -217,7 +316,10 @@ def node_sub_agent(task: SubtopicTask) -> dict:
                 "Recency: prioritise sources from 2024-2025; for older data, explicitly note "
                 "the year so the synthesis stage can assess its currency.\n\n"
                 "Be analytical and neutral — avoid promotional language and include "
-                "counterpoints where they exist.",
+                "counterpoints where they exist.\n\n"
+                "Ethics: if a source returns '[ETHICS BLOCK]', do NOT guess its contents — "
+                "rely ONLY on the Search Snippet provided for that source."
+                "{feedback_instructions}",
             ),
             (
                 "human",
@@ -226,7 +328,13 @@ def node_sub_agent(task: SubtopicTask) -> dict:
         ]
     )
 
-    response = (prompt | llm).invoke({"subtopic": subtopic, "results": search_text})
+    response = (prompt | llm).invoke(
+        {
+            "subtopic": subtopic,
+            "results": search_text,
+            "feedback_instructions": feedback_instructions,
+        }
+    )
     tagged_result = f"### {subtopic}\n{response.content}"
 
     return {
@@ -345,7 +453,9 @@ def node_synthesize_report(state: ResearchState) -> dict:
     print("\n--- [NODE] SYNTHESIZING FINAL CITED REPORT ---")
 
     aggregated = "\n\n".join(state.get("parallel_results", []))
-    sources_block = "\n".join(state.get("sources", []))
+    sources_block = "\n".join(
+        list(dict.fromkeys(state.get("sources", [])))
+    )  # deduplicate, preserve order
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -463,21 +573,19 @@ if __name__ == "__main__":
     print("Initializing Deep Research Agent Graph...\n")
     agent = build_research_graph()
 
-    query = """
-    I am a solo software developer with a budget of AUD $3,000. I want to run large language
-    models locally for daily coding assistance, RAG experimentation, and occasional fine-tuning.
-    Based on the latest 2024-2025 research, Reddit community recommendations (r/LocalLLaMA,
-    r/MachineLearning), and technical blogs:
-      1. What hardware should I buy — GPU, CPU, RAM, and storage — and why?
-      2. What software stack should I use — inference framework, quantisation format, and
-         fine-tuning tooling?
-      3. Which specific open-source LLM models are best suited to this setup?
-    Provide specific product names, current AUD prices, VRAM requirements, and benchmark
-    comparisons. Prioritise value-for-money and developer ergonomics over raw performance.
-    """
+    if len(sys.argv) > 1:
+        # Usage: python main.py "What is the best GPU for local LLMs in 2025?"
+        # Unquoted multi-word args are also accepted: python main.py What is the best GPU...
+        query = " ".join(sys.argv[1:]).strip()
+    else:
+        query = input("Research question: ").strip()
+
+    if not query:
+        print("ERROR: No query provided.")
+        exit(1)
 
     initial_state: ResearchState = {
-        "original_query": query.strip(),
+        "original_query": query,
         "search_plan": "",
         "subtopics": [],
         "search_queries": [],
