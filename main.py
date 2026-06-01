@@ -65,7 +65,7 @@ def can_fetch(url: str, user_agent: str) -> bool:
     return parser.can_fetch(user_agent, url)
 
 
-def fetch_webpage_text(url: str, max_chars: int = 4000) -> str:
+def fetch_webpage_text(url: str, max_chars: int = 8000) -> str:
     """Fetches a URL ethically: checks robots.txt, declares the bot honestly,
     applies a 1.5 s politeness delay, and strips boilerplate HTML tags."""
     if not can_fetch(url, BOT_USER_AGENT):
@@ -126,7 +126,8 @@ class EvaluationCriteria(BaseModel):
     )
     refined_queries: List[str] = Field(
         description=(
-            "One refined search query per original subtopic to address the identified gaps. "
+            "One refined search query per original subtopic, in the same order, each staying "
+            "thematically aligned to its own subtopic while targeting the identified gap. "
             "Return the original queries unchanged if is_complete is True."
         )
     )
@@ -256,11 +257,25 @@ def node_sub_agent(task: SubtopicTask) -> dict:
 
     # Structured search — each result dict has "title", "link", "snippet".
     # max_results=4 balances depth against the politeness delay.
-    try:
-        raw_results = search_wrapper.results(query, max_results=4)
-    except Exception as e:
-        print(f"  [API ERROR] DuckDuckGo search failed: {e}")
-        raw_results = []
+    # One retry with a 5 s backoff handles transient DuckDuckGo rate-limits.
+    raw_results = []
+    for _attempt in range(2):
+        try:
+            raw_results = search_wrapper.results(query, max_results=4)
+            break
+        except Exception as e:
+            if _attempt == 0:
+                print(f"  [DDG RETRY] Search failed ({e}), retrying in 5 s...")
+                time.sleep(5)
+            else:
+                print(f"  [API ERROR] DuckDuckGo search failed after retry: {e}")
+
+    if not raw_results:
+        print(f"  [SKIP] No results for '{query[:80]}' — skipping LLM call.")
+        return {
+            "parallel_results": [f"### {subtopic}\n[NO RESULTS] No search results were returned for query: {query}"],
+            "sources": [],
+        }
 
     # Fetch full page content for each result while respecting robots.txt.
     citation_urls = []
@@ -383,25 +398,34 @@ def node_evaluate_state(state: ResearchState) -> dict:
                 "named answers — not vague generalities\n"
                 "  2. At least 2-3 concrete options, implementations, or approaches are "
                 "identified and compared\n"
-                "  3. At least one authoritative source (peer-reviewed paper, official "
-                "documentation, or recognised technical expert) is present\n"
+                "  3. At least one authoritative source appropriate to the query domain: "
+                "for scientific or medical topics this means peer-reviewed papers or official "
+                "guidelines; for consumer products, technology, or market research, specialist "
+                "publications (e.g., RTINGS, Wirecutter, SoundGuys, AnandTech, manufacturer "
+                "specs) fully qualify as authoritative\n"
                 "  4. At least one real-world or community source (blog post, forum thread, "
                 "practitioner case study) is present\n"
                 "  5. At least one source dated 2024 or 2025 is present\n"
                 "  6. No critical contradiction in the evidence is left unresolved\n\n"
                 "Mark is_complete = False only when one of the above conditions is genuinely "
-                "unmet — do not fail for aspirational depth or perfect completeness.\n\n"
+                "unmet — do not fail for aspirational depth, perfect completeness, or the "
+                "absence of peer-reviewed papers on topics where such literature does not "
+                "commonly exist (e.g., consumer hardware reviews, practitioner workflows).\n\n"
                 "When is_complete = False:\n"
-                "- Write a concise feedback string that names the specific gap (e.g. "
-                "'Missing: concrete pricing for option B')\n"
-                "- Provide exactly one refined search query per subtopic — STRICTLY under 100 "
-                "characters, plain natural language, no site: operators or boolean syntax — "
-                "targeting only the identified gap",
+                "- Identify only gaps that are realistically closable via general web search\n"
+                "- Write a concise feedback string naming the specific, searchable gap\n"
+                "- Provide exactly 3 refined search queries following the slot mapping shown. "
+                "Each refined_queries[N] is LOCKED to its subtopic — the subtopic's scope "
+                "takes priority over gap coverage. If a gap belongs to subtopic 3, only "
+                "subtopic 3's query targets it; subtopics 1 and 2 refine their OWN existing "
+                "coverage instead. Under 100 characters, plain natural language, no site: "
+                "operators or boolean syntax.",
             ),
             (
                 "human",
                 "Original Query:\n{query}\n\n"
                 "Research Plan:\n{plan}\n\n"
+                "Required refined_queries slots — each slot is locked to its subtopic:\n{subtopics}\n\n"
                 "Aggregated Research:\n{research}\n\n"
                 "Does this fully meet all criteria? Provide refined queries if not.",
             ),
@@ -412,6 +436,12 @@ def node_evaluate_state(state: ResearchState) -> dict:
         {
             "query": state["original_query"],
             "plan": state["search_plan"],
+            "subtopics": "\n".join(
+                f'  refined_queries[{i}] → "{t}" | current query: "{q}"'
+                for i, (t, q) in enumerate(
+                    zip(state["subtopics"], state["search_queries"])
+                )
+            ),
             "research": aggregated,
         }
     )
