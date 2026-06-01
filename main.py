@@ -1,14 +1,15 @@
 import os
+import random
 import sys
 import time
-import random
-import requests
 import urllib.robotparser
-from typing import TypedDict, List, Annotated
+from typing import Annotated, List, TypedDict
 from urllib.parse import urlparse
-from pydantic import BaseModel, Field
+
+import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field
 
 load_dotenv(override=True)
 
@@ -18,11 +19,10 @@ import functools
 print = functools.partial(print, flush=True)
 
 # LangChain and LangGraph imports
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
-from langgraph.graph import StateGraph, END
+from langchain_core.prompts import ChatPromptTemplate
+from langgraph.graph import END, StateGraph
 from langgraph.types import Send
-
 
 # ── Ethical Web Scraping ──────────────────────────────────────────────────────
 
@@ -178,8 +178,8 @@ if _openai_key:
 elif _mistral_key:
     from langchain_mistralai import ChatMistralAI
 
-    llm = ChatMistralAI(model="mistral-large-latest", temperature=0.2)
-    _provider = "Mistral · mistral-large-latest"
+    llm = ChatMistralAI(model="mistral-medium-3-5", temperature=0.2)
+    _provider = "Mistral · mistral-medium-3-5"
 else:
     llm = None
     _provider = None

@@ -72,6 +72,43 @@ uv run uvicorn server:app --host 0.0.0.0 --port 8000
 
 The `RESEARCH_TIMEOUT` environment variable sets the per-request timeout in seconds (default: `600`).
 
+### Running the Web Server with Docker
+
+Build the image:
+
+```bash
+docker build -t research-agent-server .
+```
+
+Run the container, injecting your API key at runtime:
+
+```bash
+docker run --rm -p 8000:8000 \
+  -e OPENAI_API_KEY=sk-... \
+  research-agent-server
+```
+
+Or with Mistral:
+
+```bash
+docker run --rm -p 8000:8000 \
+  -e MISTRAL_API_KEY=your-key-here \
+  research-agent-server
+```
+
+Open [http://localhost:8000](http://localhost:8000).
+
+To increase the number of uvicorn workers, override the default command:
+
+```bash
+docker run --rm -p 8000:8000 \
+  -e OPENAI_API_KEY=sk-... \
+  research-agent-server \
+  uvicorn server:app --host 0.0.0.0 --port 8000 --workers 4
+```
+
+The container runs as a non-root user (`appuser`) on port `8000` and exposes a `/health` endpoint used by its built-in health check.
+
 ## Project Structure
 
 ```
