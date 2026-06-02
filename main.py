@@ -232,10 +232,11 @@ def node_analyze_problem(state: ResearchState) -> dict:
                 "2. Subtopic TITLES must outline the *category of knowledge* to discover (e.g., 'Authoritative architectural patterns', 'Clinical evidence guidelines'), not just restate product names. Keep exact product/framework targets in the search query.\n"
                 "3. Ensure the 3 subtopics span these distinct domain-agnostic research angles:\n"
                 "   [Angle A] Theoretical/Authoritative: Official docs, foundational standards, peer-reviewed literature, official guidelines or textbooks.\n"
-                "   [Angle B] Empirical/Objective: Benchmarks, measurable performance, clinical trials, quantitative market data, or head-to-head comparisons.\n"
-                "   [Angle C] Practitioner/Community: Real-world case studies, expert reviews, integration challenges, community forums, or field experience.\n"
+                "   [Angle B] Empirical/Comparative: Cover the broadest possible empirical landscape — benchmarks, comparative studies, trials, or quantitative evidence. Do NOT narrow to a single metric; group several related empirical concerns into one query. Accept proxy data or analogous studies when exact constraints lack public benchmarks.\n"
+                "   [Angle C] Practitioner/Community: Real-world case studies, deployment write-ups, expert reviews, migration post-mortems, or community forum experience. Explicitly include 'case study' or 'real-world' in the query to surface experiential evidence.\n"
                 "4. Search queries must be < 120 chars, plain natural language. NO advanced search operators (site:, OR, AND) as they degrade API performance.\n"
                 "5. Include the current year where recency matters. Map exact constraints to qualitative scale-class terms (e.g., use 'enterprise high-traffic' instead of '50M requests/day').\n"
+                "6. Never embed overly narrow constraints (specific version numbers, exact counts) in subtopic titles — reserve those for search queries.\n"
                 "</RULES>\n",
             ),
             ("human", "{query}"),
@@ -264,7 +265,8 @@ def node_sub_agent(task: SubtopicTask) -> dict:
     query = task["query"]
     feedback = task.get("feedback", "")
 
-    print(f"  [Sub-Agent] Searching: '{query}'")
+    print(f"\n--- [SUB-AGENT] {subtopic} ---")
+    print(f"  Query: {query[:80]}...")
     raw_results = []
     for _attempt in range(2):
         try:
@@ -347,7 +349,7 @@ def node_sub_agent(task: SubtopicTask) -> dict:
 
 def node_refine_queries(state: ResearchState) -> dict:
     """Pass-through node. State merging now ensures completed subtopics are retained."""
-    print("\n--- [NODE] REFINING — PREPARING NEXT ITERATION ---")
+    print("\n--- [NODE] REFINING — RESETTING ACCUMULATORS FOR NEXT ITERATION ---")
     print(f"  Feedback: {state.get('evaluation_feedback', '')}")
     print(f"  Refined queries: {state.get('search_queries', [])}")
     return {}
@@ -369,23 +371,26 @@ def node_evaluate_state(state: ResearchState) -> dict:
                 "Your role is a self-correcting stop-hook: determine whether the aggregated "
                 "evidence is sufficient to answer the original query with high confidence.\n\n"
                 "Mark is_complete = True if and only if ALL of the following hold:\n"
-                "  1. Every explicit constraint in the original query is addressed with specific, named answers.\n"
-                "     NOTE: Exact numeric confirmation is NOT required if the evidence addresses that scale/budget class.\n"
+                "  1. Every explicit constraint in the original query is addressed with the best available evidence.\n"
+                "     A [DATA GAP] marker counts as fully addressing that constraint — it confirms the data is not publicly indexed.\n"
+                "     Exact numeric benchmarks are NOT required when the evidence covers the relevant scale or domain class.\n"
                 "  2. At least 2-3 concrete options, implementations, or approaches are compared.\n"
                 "  3. At least one authoritative source appropriate to the inferred domain.\n"
-                "  4. At least one real-world or community source is present.\n"
-                "  5. At least one recent source (e.g., from the last 1-2 years) is present.\n"
+                "  4. At least one real-world, practitioner, or community source is present.\n"
+                "  5. At least one recent source (within the last 1-2 years) is present.\n"
                 "  6. No critical contradiction is left unresolved without acknowledging both sides.\n\n"
                 "Assign quality_score (1–10) for the holistic evidence quality:\n"
                 "  1–4: Thin, mostly irrelevant, or severely incomplete\n"
                 "  5–6: Partial — some constraints addressed, key data missing\n"
-                "  7–8: Comprehensive — major constraints met, minor gaps acceptable for synthesis\n"
-                "  9–10: Exceptional — quantitative data, authoritative sources, no meaningful gaps\n\n"
-                "IMPORTANT: [DATA GAP] markers represent valid research findings that data is not publicly accessible. "
-                "Do NOT loop to find data established as unavailable by a [DATA GAP] marker.\n\n"
+                "  7–8: Comprehensive — major constraints met, minor gaps acceptable for synthesis.\n"
+                "       This is the EXPECTED range for most real-world queries. Niche or proprietary topics\n"
+                "       rarely have public benchmarks — do not penalise for their absence.\n"
+                "  9–10: Exceptional — quantitative primary data, multiple authoritative sources, no gaps\n\n"
+                "IMPORTANT: [DATA GAP] markers are valid findings. Do NOT flag the same gap in a subsequent loop — treat it as closed.\n"
+                "Do NOT request data that is structurally unavailable via public web search (e.g., internal benchmarks, proprietary pricing).\n\n"
                 "When is_complete = False:\n"
-                "- Identify only gaps that are realistically closable via general web search.\n"
-                "- Write a concise feedback string summarising the overall gaps.\n"
+                "- Identify ONLY gaps that are realistically closable with a different web search query.\n"
+                "- Write a concise feedback string summarising those gaps.\n"
                 "- Provide a subtopic_refinements array with EXACTLY one SubtopicRefinement per subtopic, matching the same order.\n"
                 "- For subtopics that are complete, leave the gap empty ('') and reuse the current query.\n"
                 "- For subtopics that need more research, write a specific gap and a targeted new query.",
@@ -410,13 +415,13 @@ def node_evaluate_state(state: ResearchState) -> dict:
     # Smart stop conditions — evaluated before logging
     is_complete = evaluation.is_complete
     if not is_complete:
-        if score >= 7.5:
+        if score >= 7.0:
             is_complete = True
-            print(f"  Score {score:.1f} \u2265 7.5 \u2014 accepting as sufficient")
-        elif loop >= 1 and (score - prev_score) < 1.0:
+            print(f"  Score {score:.1f} \u2265 7.0 \u2014 accepting as sufficient")
+        elif loop >= 1 and (score - prev_score) < 0.5:
             is_complete = True
-            print(f"  Score delta {score - prev_score:.1f} < 1.0 \u2014 diminishing returns, forcing complete")
-        elif loop >= 3:
+            print(f"  Score delta {score - prev_score:.1f} < 0.5 \u2014 diminishing returns, forcing complete")
+        elif loop >= 2:
             is_complete = True
             print("  WARNING: Max loops reached. Forcing completion with current best data.")
 
