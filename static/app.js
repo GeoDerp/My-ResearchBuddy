@@ -2,6 +2,134 @@
 
 marked.use({ breaks: true });
 
+// ── localStorage utilities ────────────────────────────────────────
+const STORAGE_KEY = 'research_reports';
+
+function saveReport(query, report) {
+  try {
+    const reports = loadReports();
+    const id = Date.now();
+    reports.push({ id, query, report, timestamp: new Date().toISOString() });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(reports));
+    renderSidebar();
+  } catch (e) {
+    console.error('Failed to save report:', e);
+  }
+}
+
+function loadReports() {
+  try {
+    const data = localStorage.getItem(STORAGE_KEY);
+    return data ? JSON.parse(data) : [];
+  } catch (e) {
+    console.error('Failed to load reports:', e);
+    return [];
+  }
+}
+
+function deleteReport(id) {
+  try {
+    const reports = loadReports().filter(r => r.id !== id);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(reports));
+    renderSidebar();
+  } catch (e) {
+    console.error('Failed to delete report:', e);
+  }
+}
+
+function loadSavedReport(id) {
+  const reports = loadReports();
+  const report = reports.find(r => r.id === id);
+  if (!report) return;
+
+  clearChat();
+  
+  // Add user query
+  const userRow = document.createElement('div');
+  userRow.className = 'row user';
+  const userBubble = document.createElement('div');
+  userBubble.className = 'bubble';
+  userBubble.textContent = report.query;
+  userRow.appendChild(userBubble);
+  chat.appendChild(userRow);
+
+  // Add bot report
+  const botRow = document.createElement('div');
+  botRow.className = 'row bot';
+  const botBubble = document.createElement('div');
+  botBubble.className = 'bubble';
+  
+  const reportDiv = document.createElement('div');
+  reportDiv.className = 'report';
+  reportDiv.innerHTML = DOMPurify.sanitize(marked.parse(report.report));
+  reportDiv.querySelectorAll('a').forEach(a => {
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+  });
+  
+  botBubble.appendChild(reportDiv);
+  botRow.appendChild(botBubble);
+  chat.appendChild(botRow);
+  
+  scrollEnd();
+}
+
+// ── UI controls ───────────────────────────────────────────────────
+
+function clearChat() {
+  if (es) { es.close(); es = null; }
+  chat.innerHTML = '<div id="empty"><svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" /></svg><p>Ask a deep research question to get started</p></div>';
+  inp.value = '';
+  inp.style.height = 'auto';
+  lock(false);
+}
+
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  sidebar.classList.toggle('open');
+}
+
+function renderSidebar() {
+  const list = document.getElementById('reports-list');
+  const reports = loadReports();
+  
+  if (reports.length === 0) {
+    list.innerHTML = '<div class="no-reports">No saved reports yet</div>';
+    return;
+  }
+  
+  list.innerHTML = reports.reverse().map(r => {
+    const date = new Date(r.timestamp);
+    const timeStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const queryPreview = r.query.length > 60 ? r.query.substring(0, 60) + '...' : r.query;
+    return `
+      <div class="report-item" data-id="${r.id}">
+        <div class="report-item-content">
+          <div class="report-query">${escapeHtml(queryPreview)}</div>
+          <div class="report-time">${timeStr}</div>
+        </div>
+        <button class="delete-btn" title="Delete report">✕</button>
+      </div>
+    `;
+  }).join('');
+  
+  // Add event listeners to report items
+  list.querySelectorAll('.report-item').forEach(item => {
+    const id = parseInt(item.dataset.id);
+    item.querySelector('.report-item-content').addEventListener('click', () => loadSavedReport(id));
+    item.querySelector('.delete-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteReport(id);
+    });
+  });
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
 // Provider badge
 fetch('/health')
   .then(r => r.json())
@@ -12,6 +140,14 @@ const chat = document.getElementById('chat');
 const inp = document.getElementById('inp');
 const btn = document.getElementById('btn');
 let es = null;
+
+// Initialize sidebar on page load
+renderSidebar();
+
+// Add event listeners for new controls
+document.getElementById('new-chat-btn').addEventListener('click', clearChat);
+document.getElementById('sidebar-toggle').addEventListener('click', toggleSidebar);
+document.querySelector('.close-sidebar').addEventListener('click', toggleSidebar);
 
 inp.addEventListener('input', () => {
   inp.style.height = 'auto';
@@ -116,6 +252,8 @@ function send() {
         a.target = '_blank';
         a.rel = 'noopener noreferrer';
       });
+      // Auto-save completed report
+      saveReport(q, d.report);
       scrollEnd();
 
     } else if (d.type === 'done') {
